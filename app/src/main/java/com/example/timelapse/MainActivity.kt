@@ -1,33 +1,29 @@
 package com.example.timelapse
 
-import android.Manifest
 import android.annotation.TargetApi
 import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.Visualizer
+import android.media.audiofx.Visualizer.getCaptureSizeRange
 import android.os.Build
 import android.os.Bundle
-import com.google.android.material.snackbar.Snackbar
-import androidx.appcompat.app.AppCompatActivity
-import android.view.Menu
-import android.view.MenuItem
 import android.widget.Button
 import android.widget.Toast
 import androidx.annotation.RequiresApi
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-
-import kotlinx.android.synthetic.main.activity_main.*
+import java.util.*
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
+    val CAPTURE_SIZE = 128
     val SAMPLING_RATE = 44100
     val REQUEST_CODE_AUDIO_PERMISSION = 1
 
     private var visualizer: Visualizer? = null
-
-    lateinit var magnitudesArray: FloatArray
 
     private var mWaveBuffer: ByteArray? = null
     private var mFftBuffer: ByteArray? = null
@@ -37,6 +33,7 @@ class MainActivity : AppCompatActivity() {
     private var mAudioRecord: AudioRecord? = null
 
     private var mAudioRecordState: Boolean = false
+    private val REQUEST_IMAGE_CAPTURE = 1
 
     @TargetApi(Build.VERSION_CODES.KITKAT)
     @RequiresApi(Build.VERSION_CODES.JELLY_BEAN)
@@ -50,7 +47,7 @@ class MainActivity : AppCompatActivity() {
         mAudioBufferSize = AudioRecord.getMinBufferSize(SAMPLING_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_8BIT)
         mAudioRecord = AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLING_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_8BIT, mAudioBufferSize)
 
-        val button = findViewById<Button>(R.id.button)
+        val button = findViewById<Button>(R.id.record)
         println("mAudioBufferSize: $mAudioBufferSize")
 
         if (mAudioRecord!!.state != AudioRecord.STATE_INITIALIZED)
@@ -61,11 +58,10 @@ class MainActivity : AppCompatActivity() {
         try {
             println("BEGIN INITIALIZING VIZUALIZER.")
             println("Audio Session ID: ${mAudioRecord!!.audioSessionId}")
-            //visualizer = Visualizer(mAudioRecord.audioSessionId).apply {
+//            visualizer = Visualizer(mAudioRecord!!.audioSessionId).apply {
             visualizer = Visualizer(0).apply {
                 enabled = false
-                captureSize = 512
-                //captureSize = captureSizeRange[1]
+                captureSize = CAPTURE_SIZE
 
                 try {
                     scalingMode = Visualizer.SCALING_MODE_NORMALIZED
@@ -78,13 +74,17 @@ class MainActivity : AppCompatActivity() {
                     override fun onFftDataCapture(visualizer: Visualizer?, fft: ByteArray?, samplingRate: Int) {
                         val n = fft?.size
                         val magnitudes = FloatArray(n!! / 2 + 1)
-                        magnitudes[0] = Math.abs(fft[0].toFloat())
-                        magnitudes[n / 2] = Math.abs(fft[1].toFloat())
+                        val frequencies = FloatArray(n / 2 + 1)
+                        frequencies[0] = 0.0.toFloat()
+                        frequencies[n / 2] = (getSamplingRate() * 0.0001 / 2).toFloat()
+                        magnitudes[0] = abs(fft[0].toFloat())
+                        magnitudes[n / 2] = abs(fft[1].toFloat())
                         for (k in 1 until n / 2) {
-                            val i = k * 2
-                            magnitudes[k] = Math.hypot(fft[i].toDouble(), fft[i + 1].toDouble()).toFloat()
+                            magnitudes[k] = Math.hypot(fft[k * 2].toDouble(), fft[k * 2 + 1].toDouble()).toFloat()
+                            frequencies[k] = frequencies[n /2 ] * k * 2 / n
                         }
                         val ms = magnitudes.joinToString(", ")
+                        println("Frequencies: ${frequencies.joinToString(", ")}")
                         println("Magnitudes: $ms" )
                     }
                     override fun onWaveFormDataCapture(visualizer: Visualizer?, waveform: ByteArray?, samplingRate: Int) {
