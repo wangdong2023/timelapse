@@ -97,7 +97,7 @@ class PictureCapturingService(activity: Activity) {
                 )
                 == PackageManager.PERMISSION_GRANTED
             ) {
-                manager.openCamera(currentCameraId, stateCallback, null)
+                manager.openCamera(currentCameraId!!, stateCallback, null)
             } else {
                 print("I'm else")
             }
@@ -162,7 +162,7 @@ class PictureCapturingService(activity: Activity) {
                         e
                     )
                 }
-            }, 500)
+            }, 200)
         }
 
         override fun onDisconnected(camera: CameraDevice) {
@@ -206,8 +206,7 @@ class PictureCapturingService(activity: Activity) {
             Log.e(TAG, "cameraDevice is null")
             return
         }
-        val characteristics: CameraCharacteristics =
-            manager.getCameraCharacteristics(cameraDevice!!.id)
+        val characteristics: CameraCharacteristics = manager.getCameraCharacteristics(cameraDevice!!.id)
         var jpegSizes: Array<Size>? = null
         val streamConfigurationMap =
             characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)

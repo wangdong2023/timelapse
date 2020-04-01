@@ -4,23 +4,25 @@ import android.annotation.TargetApi
 import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
-import android.media.MediaRecorder
+import android.media.AudioRecord.OnRecordPositionUpdateListener
+import android.media.MediaRecorder.AudioSource
 import android.media.audiofx.Visualizer
-import android.media.audiofx.Visualizer.getCaptureSizeRange
 import android.os.Build
 import android.os.Bundle
+import android.os.Process
 import android.widget.Button
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import java.util.*
-import kotlin.math.abs
+import org.apache.commons.math3.transform.DftNormalization
+import org.apache.commons.math3.transform.FastFourierTransformer
+import org.apache.commons.math3.transform.TransformType
+
 
 class MainActivity : AppCompatActivity() {
     val CAPTURE_SIZE = 128
-    val SAMPLING_RATE = 44100
     val REQUEST_CODE_AUDIO_PERMISSION = 1
 
     private var visualizer: Visualizer? = null
@@ -29,11 +31,11 @@ class MainActivity : AppCompatActivity() {
     private var mFftBuffer: ByteArray? = null
     private var mDataCaptureSize: Int = 0
 
-    private var mAudioBufferSize: Int = 0
-    private var mAudioRecord: AudioRecord? = null
+    private var bufferSize: Int = 0
 
-    private var mAudioRecordState: Boolean = false
-    private val REQUEST_IMAGE_CAPTURE = 1
+    private var isRecording: Boolean = false
+    private var audioIn: AudioIn = AudioIn(440.0, 0.1f)
+    private var lastBuffer = 0
 
     @TargetApi(Build.VERSION_CODES.KITKAT)
     @RequiresApi(Build.VERSION_CODES.JELLY_BEAN)
@@ -41,85 +43,66 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        ensurePermissionAllowed()
         println("OUTSIDE PERMISSIONS CHECK")
-
-        mAudioBufferSize = AudioRecord.getMinBufferSize(SAMPLING_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_8BIT)
-        mAudioRecord = AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLING_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_8BIT, mAudioBufferSize)
+        ensurePermissionAllowed()
 
         val button = findViewById<Button>(R.id.record)
-        println("mAudioBufferSize: $mAudioBufferSize")
 
-        if (mAudioRecord!!.state != AudioRecord.STATE_INITIALIZED)
-            println("AudioRecord init failed")
-        else
-            println("AudioRecord init success")
-
-        try {
-            println("BEGIN INITIALIZING VIZUALIZER.")
-            println("Audio Session ID: ${mAudioRecord!!.audioSessionId}")
-//            visualizer = Visualizer(mAudioRecord!!.audioSessionId).apply {
-            visualizer = Visualizer(0).apply {
-                enabled = false
-                captureSize = CAPTURE_SIZE
-
-                try {
-                    scalingMode = Visualizer.SCALING_MODE_NORMALIZED
-                } catch (e: NoSuchMethodError) {
-                    println("CANT SET SCALING MODE.")
-                }
-                measurementMode = Visualizer.MEASUREMENT_MODE_NONE
-
-                setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
-                    override fun onFftDataCapture(visualizer: Visualizer?, fft: ByteArray?, samplingRate: Int) {
-                        val n = fft?.size
-                        val magnitudes = FloatArray(n!! / 2 + 1)
-                        val frequencies = FloatArray(n / 2 + 1)
-                        frequencies[0] = 0.0.toFloat()
-                        frequencies[n / 2] = (getSamplingRate() * 0.0001 / 2).toFloat()
-                        magnitudes[0] = abs(fft[0].toFloat())
-                        magnitudes[n / 2] = abs(fft[1].toFloat())
-                        for (k in 1 until n / 2) {
-                            magnitudes[k] = Math.hypot(fft[k * 2].toDouble(), fft[k * 2 + 1].toDouble()).toFloat()
-                            frequencies[k] = frequencies[n /2 ] * k * 2 / n
-                        }
-                        val ms = magnitudes.joinToString(", ")
-                        println("Frequencies: ${frequencies.joinToString(", ")}")
-                        println("Magnitudes: $ms" )
-                    }
-                    override fun onWaveFormDataCapture(visualizer: Visualizer?, waveform: ByteArray?, samplingRate: Int) {
-                        val waveBuffer = mWaveBuffer ?: return
-                        if (waveform == null || waveform.size != waveBuffer.size) {
-                            return
-                        }
-                        System.arraycopy(waveform, 0, waveBuffer, 0, waveform.size)
-                    }
-
-                }, Visualizer.getMaxCaptureRate(), true, true)
-            }.apply {
-                mDataCaptureSize = captureSize.apply {
-                    mWaveBuffer = ByteArray(this)
-                    mFftBuffer = ByteArray(this)
-                }
-            }
-        } catch (e: RuntimeException) {
-            println("ERROR DURING VISUALIZER INITIALIZATION: $e")
-        }
+//        try {
+//            println("BEGIN INITIALIZING VIZUALIZER.")
+//            println("Audio Session ID: ${recorder!!.audioSessionId}")
+////            visualizer = Visualizer(mAudioRecord!!.audioSessionId).apply {
+//            visualizer = Visualizer(0).apply {
+//                enabled = false
+//                captureSize = CAPTURE_SIZE
+//
+//                try {
+//                    scalingMode = Visualizer.SCALING_MODE_NORMALIZED
+//                } catch (e: NoSuchMethodError) {
+//                    println("CANT SET SCALING MODE.")
+//                }
+//                measurementMode = Visualizer.MEASUREMENT_MODE_NONE
+//
+//                setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
+//                    override fun onFftDataCapture(visualizer: Visualizer?, fft: ByteArray?, samplingRate: Int) {
+//                        val n = fft?.size
+//                        val magnitudes = FloatArray(n!! / 2 + 1)
+//                        val frequencies = FloatArray(n / 2 + 1)
+//                        frequencies[0] = 0.0.toFloat()
+//                        frequencies[n / 2] = (getSamplingRate() * 0.0001 / 2).toFloat()
+//                        magnitudes[0] = abs(fft[0].toFloat())
+//                        magnitudes[n / 2] = abs(fft[1].toFloat())
+//                        for (k in 1 until n / 2) {
+//                            magnitudes[k] = Math.hypot(fft[k * 2].toDouble(), fft[k * 2 + 1].toDouble()).toFloat()
+//                            frequencies[k] = frequencies[n /2 ] * k * 2 / n
+//                        }
+//                        val ms = magnitudes.joinToString(", ")
+//                        println("Frequencies: ${frequencies.joinToString(", ")}")
+//                        println("Magnitudes: $ms" )
+//                    }
+//                    override fun onWaveFormDataCapture(visualizer: Visualizer?, waveform: ByteArray?, samplingRate: Int) {
+//                        val waveBuffer = mWaveBuffer ?: return
+//                        if (waveform == null || waveform.size != waveBuffer.size) {
+//                            return
+//                        }
+//                        System.arraycopy(waveform, 0, waveBuffer, 0, waveform.size)
+//                    }
+//
+//                }, Visualizer.getMaxCaptureRate(), true, true)
+//            }.apply {
+//                mDataCaptureSize = captureSize.apply {
+//                    mWaveBuffer = ByteArray(this)
+//                    mFftBuffer = ByteArray(this)
+//                }
+//            }
+//        } catch (e: RuntimeException) {
+//            println("ERROR DURING VISUALIZER INITIALIZATION: $e")
+//        }
 
         button.setOnClickListener {
-            if (!mAudioRecordState) {
-                mAudioRecord!!.startRecording()
-                visualizer?.enabled = true
-
-                mAudioRecordState = true
-            }
-            else {
-                mAudioRecord!!.stop()
-                visualizer?.enabled = false
-
-                mAudioRecordState = false
-            }
+            audioIn.startStop()
         }
+//        audioIn.startStop()
     }
 
     private fun ensurePermissionAllowed() {
@@ -133,6 +116,16 @@ class MainActivity : AppCompatActivity() {
         else {
             println("PERMISSION TO RECORD AUDIO GRANTED.")
         }
+
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            println("PERMISSION TO CAMERA.  REQUESTING.")
+            ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.CAMERA), 1)
+        } else if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            println("PERMISSION TO WRITE_EXTERNAL_STORAGE.  REQUESTING.")
+            ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE), 1)
+        } else {
+            println("PERMISSION GRANTED.")
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -145,4 +138,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+
 }
