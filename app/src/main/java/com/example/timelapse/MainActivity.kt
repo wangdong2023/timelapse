@@ -1,108 +1,78 @@
 package com.example.timelapse
 
 import android.annotation.TargetApi
+import android.app.Activity
 import android.content.pm.PackageManager
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.AudioRecord.OnRecordPositionUpdateListener
-import android.media.MediaRecorder.AudioSource
-import android.media.audiofx.Visualizer
-import android.os.Build
-import android.os.Bundle
-import android.os.Process
+import android.os.*
 import android.widget.Button
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import org.apache.commons.math3.transform.DftNormalization
-import org.apache.commons.math3.transform.FastFourierTransformer
-import org.apache.commons.math3.transform.TransformType
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 
+@TargetApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
+@RequiresApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
 class MainActivity : AppCompatActivity() {
-    val CAPTURE_SIZE = 128
     val REQUEST_CODE_AUDIO_PERMISSION = 1
+    private val takePicture: AtomicBoolean = AtomicBoolean(false)
+    private val projectName: AtomicReference<String> = AtomicReference("test_project")
+    private var audioIn: AudioIn = AudioIn(440.0, 0.1f, takePicture)
 
-    private var visualizer: Visualizer? = null
-
-    private var mWaveBuffer: ByteArray? = null
-    private var mFftBuffer: ByteArray? = null
-    private var mDataCaptureSize: Int = 0
-
-    private var bufferSize: Int = 0
-
-    private var isRecording: Boolean = false
-    private var audioIn: AudioIn = AudioIn(440.0, 0.1f)
-    private var lastBuffer = 0
-
-    @TargetApi(Build.VERSION_CODES.KITKAT)
-    @RequiresApi(Build.VERSION_CODES.JELLY_BEAN)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        val pictureRun = PictureHandlerThread(this, takePicture, projectName)
 
         println("OUTSIDE PERMISSIONS CHECK")
         ensurePermissionAllowed()
 
         val button = findViewById<Button>(R.id.record)
 
-//        try {
-//            println("BEGIN INITIALIZING VIZUALIZER.")
-//            println("Audio Session ID: ${recorder!!.audioSessionId}")
-////            visualizer = Visualizer(mAudioRecord!!.audioSessionId).apply {
-//            visualizer = Visualizer(0).apply {
-//                enabled = false
-//                captureSize = CAPTURE_SIZE
-//
-//                try {
-//                    scalingMode = Visualizer.SCALING_MODE_NORMALIZED
-//                } catch (e: NoSuchMethodError) {
-//                    println("CANT SET SCALING MODE.")
-//                }
-//                measurementMode = Visualizer.MEASUREMENT_MODE_NONE
-//
-//                setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
-//                    override fun onFftDataCapture(visualizer: Visualizer?, fft: ByteArray?, samplingRate: Int) {
-//                        val n = fft?.size
-//                        val magnitudes = FloatArray(n!! / 2 + 1)
-//                        val frequencies = FloatArray(n / 2 + 1)
-//                        frequencies[0] = 0.0.toFloat()
-//                        frequencies[n / 2] = (getSamplingRate() * 0.0001 / 2).toFloat()
-//                        magnitudes[0] = abs(fft[0].toFloat())
-//                        magnitudes[n / 2] = abs(fft[1].toFloat())
-//                        for (k in 1 until n / 2) {
-//                            magnitudes[k] = Math.hypot(fft[k * 2].toDouble(), fft[k * 2 + 1].toDouble()).toFloat()
-//                            frequencies[k] = frequencies[n /2 ] * k * 2 / n
-//                        }
-//                        val ms = magnitudes.joinToString(", ")
-//                        println("Frequencies: ${frequencies.joinToString(", ")}")
-//                        println("Magnitudes: $ms" )
-//                    }
-//                    override fun onWaveFormDataCapture(visualizer: Visualizer?, waveform: ByteArray?, samplingRate: Int) {
-//                        val waveBuffer = mWaveBuffer ?: return
-//                        if (waveform == null || waveform.size != waveBuffer.size) {
-//                            return
-//                        }
-//                        System.arraycopy(waveform, 0, waveBuffer, 0, waveform.size)
-//                    }
-//
-//                }, Visualizer.getMaxCaptureRate(), true, true)
-//            }.apply {
-//                mDataCaptureSize = captureSize.apply {
-//                    mWaveBuffer = ByteArray(this)
-//                    mFftBuffer = ByteArray(this)
-//                }
-//            }
-//        } catch (e: RuntimeException) {
-//            println("ERROR DURING VISUALIZER INITIALIZATION: $e")
-//        }
-
         button.setOnClickListener {
             audioIn.startStop()
         }
-//        audioIn.startStop()
+        pictureRun.start()
+        audioIn.start()
+    }
+
+    private class PictureHandlerThread(val activity: Activity, val takePicture: AtomicBoolean, val projectName: AtomicReference<String>): Thread() {
+        override fun  run() {
+            val pictureCapturingService = PictureCapturingService(activity, projectName.get())
+
+            Looper.prepare()
+
+            val mHandler = Handler()
+            val pictureRun = PictureRun(Process.THREAD_PRIORITY_MORE_FAVORABLE, pictureCapturingService, takePicture, mHandler)
+
+            pictureRun.start()
+            Looper.loop()
+        }
+    }
+
+    private class PictureRun(val threadPriority: Int, val pictureCapturingService: PictureCapturingService, val takePicture: AtomicBoolean, val handler: Handler): Thread() {
+        override fun run() {
+            Process.setThreadPriority(threadPriority)
+            try {
+//                println("Running picture thread ${currentThread().id}")
+                if (!takePicture.get()) {
+//                    println("Sleeping")
+                    sleep(500)
+                } else {
+                    println("Taking picture ${Thread.currentThread().id}")
+                    pictureCapturingService.startCapturing()
+                    takePicture.set(false)
+                }
+                handler.post(PictureRun(threadPriority, pictureCapturingService, takePicture, handler))
+            } catch (e: Exception) {
+                println("Something happed ${Thread.currentThread().id}")
+                println(e.message)
+                throw e
+            }
+        }
     }
 
     private fun ensurePermissionAllowed() {
@@ -138,6 +108,4 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
-
 }

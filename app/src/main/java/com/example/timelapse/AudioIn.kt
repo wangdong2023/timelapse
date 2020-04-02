@@ -7,9 +7,10 @@ import android.os.Process
 import org.apache.commons.math3.transform.DftNormalization
 import org.apache.commons.math3.transform.FastFourierTransformer
 import org.apache.commons.math3.transform.TransformType
+import java.util.concurrent.atomic.AtomicBoolean
 
 
-class AudioIn(val targetFrequency: Double, val tolerance: Float): Thread() {
+class AudioIn(val targetFrequency: Double, private val tolerance: Float, val takePicture: AtomicBoolean): Thread() {
     val SAMPLING_RATE = 44100
 
     private var stopped = true
@@ -37,9 +38,12 @@ class AudioIn(val targetFrequency: Double, val tolerance: Float): Thread() {
         recorder.setRecordPositionUpdateListener(object :
             AudioRecord.OnRecordPositionUpdateListener {
             override fun onPeriodicNotification(recorder: AudioRecord) {
+//                println("last buffer ${lastBuffer}, ${currentThread().id}")
                 val buffer: ShortArray = buffers.get(++lastBuffer % buffers.size)
                 recorder.read(buffer, 0, sampleBufferSize)
-                process(buffer)
+                if (lastBuffer % 5 == 0) {
+                    process(buffer)
+                }
             }
 
             override fun onMarkerReached(recorder: AudioRecord) {}
@@ -48,7 +52,7 @@ class AudioIn(val targetFrequency: Double, val tolerance: Float): Thread() {
 
     public fun startStop() {
         if (stopped) {
-            println("Starting")
+            println("Starting ${currentThread().id}")
             stopped = false
             recorder.startRecording()
         } else {
@@ -72,26 +76,24 @@ class AudioIn(val targetFrequency: Double, val tolerance: Float): Thread() {
     }
 
     private fun process(buffer: ShortArray){
-        println("processing")
+//        println("processing, ${currentThread().id}")
         val ffts = transformer.transform(buffer.map{it.toDouble()}.toDoubleArray(), TransformType.FORWARD)
         val magnitudes = ffts.map { Math.log10(Math.hypot(it.real, it.imaginary)) }
         val frequencies = magnitudes.mapIndexed { index, d -> index * SAMPLING_RATE * 1.0 / sampleBufferSize }
 //            println(buffer.joinToString(","))
         var max = 0.0
-        var max_freq = -1.0
+        var maxFreq = -1.0
         for (i in 0 .. sampleBufferSize - 1) {
             if (magnitudes[i] > max) {
                 max = magnitudes[i]
-                max_freq = frequencies[i]
+                maxFreq = frequencies[i]
             }
         }
 
-        if (max_freq > targetFrequency * (1 - tolerance) && max_freq < targetFrequency * (1 + tolerance)) {
+        if (maxFreq > targetFrequency * (1 - tolerance) && maxFreq < targetFrequency * (1 + tolerance)) {
             println("Taking a picture")
+            takePicture.set(true)
         }
-//            println("${magnitudes.max()}, ${magnitudes.min()}, ${magnitudes.size}, ${magnitudes[0]}")
-//            println("${max_freq}: ${max}")
-//            println(magnitudes.joinToString(","))
     }
 
     private fun close() {

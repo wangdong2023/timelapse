@@ -14,6 +14,7 @@ import android.media.ImageReader.OnImageAvailableListener
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.util.Size
 import android.util.SparseIntArray
@@ -35,7 +36,7 @@ import java.util.*
  */
 @TargetApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
 @RequiresApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
-class PictureCapturingService(activity: Activity) {
+class PictureCapturingService(val activity: Activity, val projectName: String) {
     private val ORIENTATIONS = SparseIntArray()
 
     init {
@@ -45,15 +46,10 @@ class PictureCapturingService(activity: Activity) {
         ORIENTATIONS.append(Surface.ROTATION_270, 180)
     }
     private var cameraDevice: CameraDevice? = null
-    private var imageReader: ImageReader? = null
 
-    private var currentCameraId: String? = null
-    private var cameraClosed = false
-    private var activity: Activity = activity
-    /**
-     * stores a sorted map of (pictureUrlOnDisk, PictureData).
-     */
-    private var picturesTaken: TreeMap<String, ByteArray>? = null
+    private val currentCameraId: String
+    private var cameraClosed = true
+    private var reader: ImageReader? = null
 
     var context: Context
     var manager: CameraManager
@@ -61,6 +57,8 @@ class PictureCapturingService(activity: Activity) {
     init {
         context = activity.applicationContext
         manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        currentCameraId = manager.cameraIdList[0]
+        println("Cameraid ${currentCameraId}")
     }
 //    private var capturingListener: PictureCapturingListener? = null
 
@@ -70,10 +68,12 @@ class PictureCapturingService(activity: Activity) {
      * @param listener picture capturing listener
      */
     fun startCapturing() {
-        picturesTaken = TreeMap()
         try {
-            currentCameraId = manager.cameraIdList[0]
-            openCamera()
+            if (!cameraClosed) {
+                println("Camera in use, skip this picture")
+            } else {
+                openCamera()
+            }
         } catch (e: CameraAccessException) {
             Log.e(
                 TAG,
@@ -84,6 +84,7 @@ class PictureCapturingService(activity: Activity) {
     }
 
     private fun openCamera() {
+        print("Opening camera")
         Log.d(
             TAG,
             "opening camera $currentCameraId"
@@ -97,7 +98,7 @@ class PictureCapturingService(activity: Activity) {
                 )
                 == PackageManager.PERMISSION_GRANTED
             ) {
-                manager.openCamera(currentCameraId!!, stateCallback, null)
+                manager.openCamera(currentCameraId, stateCallback, null)
             } else {
                 print("I'm else")
             }
@@ -116,19 +117,10 @@ class PictureCapturingService(activity: Activity) {
             result: TotalCaptureResult
         ) {
             super.onCaptureCompleted(session, request, result)
-            if (picturesTaken!!.lastEntry() != null) {
-//                capturingListener.onCaptureDone(
-//                    picturesTaken!!.lastEntry().key,
-//                    picturesTaken!!.lastEntry().value
-//                )
-                Log.i(
-                    TAG,
-                    "done taking picture from camera " + cameraDevice!!.id
-                )
-            }
             closeCamera()
         }
     }
+
     private val onImageAvailableListener =
         OnImageAvailableListener { imReader: ImageReader ->
             val image = imReader.acquireLatestImage()
@@ -146,11 +138,8 @@ class PictureCapturingService(activity: Activity) {
                 "camera " + camera.id + " opened"
             )
             cameraDevice = camera
-            Log.i(
-                TAG,
-                "Taking picture from camera " + camera.id
-            )
-            print("Taking picture from camera " + camera.id)
+
+            println("Taking picture from camera " + camera.id)
             //Take the picture after some delay. It may resolve getting a black dark photos.
             Handler().postDelayed({
                 try {
@@ -207,6 +196,12 @@ class PictureCapturingService(activity: Activity) {
             return
         }
         val characteristics: CameraCharacteristics = manager.getCameraCharacteristics(cameraDevice!!.id)
+        if (characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) {
+            Log.i(TAG, "Camera is facing back")
+        } else {
+            Log.i(TAG, "Camera is facing front")
+        }
+
         var jpegSizes: Array<Size>? = null
         val streamConfigurationMap =
             characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
@@ -216,19 +211,16 @@ class PictureCapturingService(activity: Activity) {
         val jpegSizesNotEmpty = jpegSizes != null && 0 < jpegSizes.size
         val width = if (jpegSizesNotEmpty) jpegSizes!![0].width else 640
         val height = if (jpegSizesNotEmpty) jpegSizes!![0].height else 480
-        val reader =
-            ImageReader.newInstance(width, height, ImageFormat.JPEG, 1)
-        val outputSurfaces: MutableList<Surface> =
-            ArrayList()
-        outputSurfaces.add(reader.surface)
-        val captureBuilder =
-            cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-        captureBuilder.addTarget(reader.surface)
+        if (reader == null) {
+            reader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 1)
+            reader!!.setOnImageAvailableListener(onImageAvailableListener, null)
+        }
+        val captureBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+        captureBuilder.addTarget(reader!!.surface)
         captureBuilder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
         captureBuilder[CaptureRequest.JPEG_ORIENTATION] = getOrientation()
-        reader.setOnImageAvailableListener(onImageAvailableListener, null)
         cameraDevice!!.createCaptureSession(
-            outputSurfaces,
+            listOf(reader!!.surface),
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     try {
@@ -253,9 +245,8 @@ class PictureCapturingService(activity: Activity) {
         try {
             FileOutputStream(file).use { output ->
                 output.write(bytes)
-                picturesTaken!!.put(file.path, bytes)
             }
-            Log.i(TAG, "Image save successful")
+            Log.i(TAG, "Image created at ${file.absolutePath}")
         } catch (e: IOException) {
             Log.e(
                 TAG,
@@ -268,11 +259,10 @@ class PictureCapturingService(activity: Activity) {
     private fun createImageFile(): File {
         // Create an image file name
         val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss").format(Date())
-        val storageDir: File = Environment.getExternalStorageDirectory()
-        return File.createTempFile(
-            "JPEG_${timeStamp}_", /* prefix */
-            ".jpg", /* suffix */
-            storageDir /* directory */
+        val storageDir = context.getExternalFilesDir(projectName)
+        return File(
+            storageDir,
+            "${timeStamp}.jpg"
         )
     }
 
@@ -281,13 +271,10 @@ class PictureCapturingService(activity: Activity) {
             TAG,
             "closing camera " + cameraDevice!!.id
         )
-        if (null != cameraDevice && !cameraClosed) {
+        if (null != cameraDevice) {
             cameraDevice!!.close()
             cameraDevice = null
         }
-        if (null != imageReader) {
-            imageReader!!.close()
-            imageReader = null
-        }
+        cameraClosed = true
     }
 }
