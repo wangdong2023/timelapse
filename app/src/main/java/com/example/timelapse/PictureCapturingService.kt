@@ -12,9 +12,7 @@ import android.hardware.camera2.CameraCaptureSession.CaptureCallback
 import android.media.ImageReader
 import android.media.ImageReader.OnImageAvailableListener
 import android.os.Build
-import android.os.Environment
 import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import android.util.Size
 import android.util.SparseIntArray
@@ -24,8 +22,10 @@ import androidx.core.app.ActivityCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.lang.RuntimeException
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.atomic.AtomicReference
 
 
 /**
@@ -36,7 +36,7 @@ import java.util.*
  */
 @TargetApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
 @RequiresApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
-class PictureCapturingService(val activity: Activity, val projectName: String) {
+class PictureCapturingService(val activity: Activity, val projectName: AtomicReference<String>) {
     private val ORIENTATIONS = SparseIntArray()
 
     init {
@@ -47,20 +47,55 @@ class PictureCapturingService(val activity: Activity, val projectName: String) {
     }
     private var cameraDevice: CameraDevice? = null
 
-    private val currentCameraId: String
+    private var cameraId: String? = null
     private var cameraClosed = true
-    private var reader: ImageReader? = null
+    private var reader: ImageReader
 
-    var context: Context
+    private val onImageAvailableListener =
+        OnImageAvailableListener { imReader: ImageReader ->
+            val image = imReader.acquireLatestImage()
+            val buffer = image.planes[0].buffer
+            val bytes = ByteArray(buffer.capacity())
+            buffer[bytes]
+            saveImageToDisk(bytes)
+            image.close()
+        }
+
+    var context = activity.applicationContext
     var manager: CameraManager
 
     init {
-        context = activity.applicationContext
         manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        currentCameraId = manager.cameraIdList[0]
-        println("Cameraid ${currentCameraId}")
+
+        var characteristics: CameraCharacteristics? = null
+        for (cid in manager.cameraIdList) {
+            characteristics = manager.getCameraCharacteristics(cid)
+            if (characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) {
+                cameraId = cid
+                break
+            }
+        }
+        if (cameraId == null) {
+            throw RuntimeException("No backward camera")
+        }
+        println("Cameraid ${cameraId}")
+
+
+        val streamConfigurationMap =
+            characteristics!!.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+
+        var jpegSizes: Array<Size> = emptyArray()
+        if (streamConfigurationMap != null) {
+            jpegSizes = streamConfigurationMap.getOutputSizes(ImageFormat.JPEG)
+        }
+
+        val width = if (jpegSizes.isNotEmpty()) jpegSizes[0].width else 640
+        val height = if (jpegSizes.isNotEmpty()) jpegSizes[0].height else 480
+
+        println("Image size is ${width} * ${height}")
+        reader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 5)
+        reader.setOnImageAvailableListener(onImageAvailableListener, null)
     }
-//    private var capturingListener: PictureCapturingListener? = null
 
     /**
      * Starts pictures capturing treatment.
@@ -84,11 +119,8 @@ class PictureCapturingService(val activity: Activity, val projectName: String) {
     }
 
     private fun openCamera() {
-        print("Opening camera")
-        Log.d(
-            TAG,
-            "opening camera $currentCameraId"
-        )
+        println("Opening camera")
+
         try {
             if (ActivityCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED
@@ -98,14 +130,14 @@ class PictureCapturingService(val activity: Activity, val projectName: String) {
                 )
                 == PackageManager.PERMISSION_GRANTED
             ) {
-                manager.openCamera(currentCameraId, stateCallback, null)
+                manager.openCamera(cameraId!!, stateCallback, null)
             } else {
-                print("I'm else")
+                println("I'm else")
             }
         } catch (e: CameraAccessException) {
             Log.e(
                 TAG,
-                " exception occurred while opening camera $currentCameraId",
+                " exception occurred while opening camera $cameraId",
                 e
             )
         }
@@ -121,15 +153,7 @@ class PictureCapturingService(val activity: Activity, val projectName: String) {
         }
     }
 
-    private val onImageAvailableListener =
-        OnImageAvailableListener { imReader: ImageReader ->
-            val image = imReader.acquireLatestImage()
-            val buffer = image.planes[0].buffer
-            val bytes = ByteArray(buffer.capacity())
-            buffer[bytes]
-            saveImageToDisk(bytes)
-            image.close()
-        }
+
     private val stateCallback: CameraDevice.StateCallback = object : CameraDevice.StateCallback() {
         override fun onOpened(camera: CameraDevice) {
             cameraClosed = false
@@ -147,7 +171,7 @@ class PictureCapturingService(val activity: Activity, val projectName: String) {
                 } catch (e: CameraAccessException) {
                     Log.e(
                         TAG,
-                        " exception occurred while taking picture from $currentCameraId",
+                        " exception occurred while taking picture from $cameraId",
                         e
                     )
                 }
@@ -185,7 +209,7 @@ class PictureCapturingService(val activity: Activity, val projectName: String) {
     }
 
     private fun getOrientation(): Int {
-        val rotation: Int = this.activity.getWindowManager().getDefaultDisplay().getRotation()
+        val rotation: Int = activity.getWindowManager().getDefaultDisplay().getRotation()
         return ORIENTATIONS.get(rotation)
     }
 
@@ -195,32 +219,14 @@ class PictureCapturingService(val activity: Activity, val projectName: String) {
             Log.e(TAG, "cameraDevice is null")
             return
         }
-        val characteristics: CameraCharacteristics = manager.getCameraCharacteristics(cameraDevice!!.id)
-        if (characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) {
-            Log.i(TAG, "Camera is facing back")
-        } else {
-            Log.i(TAG, "Camera is facing front")
-        }
 
-        var jpegSizes: Array<Size>? = null
-        val streamConfigurationMap =
-            characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        if (streamConfigurationMap != null) {
-            jpegSizes = streamConfigurationMap.getOutputSizes(ImageFormat.JPEG)
-        }
-        val jpegSizesNotEmpty = jpegSizes != null && 0 < jpegSizes.size
-        val width = if (jpegSizesNotEmpty) jpegSizes!![0].width else 640
-        val height = if (jpegSizesNotEmpty) jpegSizes!![0].height else 480
-        if (reader == null) {
-            reader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 1)
-            reader!!.setOnImageAvailableListener(onImageAvailableListener, null)
-        }
         val captureBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-        captureBuilder.addTarget(reader!!.surface)
+        captureBuilder.addTarget(reader.surface)
         captureBuilder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
         captureBuilder[CaptureRequest.JPEG_ORIENTATION] = getOrientation()
+
         cameraDevice!!.createCaptureSession(
-            listOf(reader!!.surface),
+            listOf(reader.surface),
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     try {
@@ -228,7 +234,7 @@ class PictureCapturingService(val activity: Activity, val projectName: String) {
                     } catch (e: CameraAccessException) {
                         Log.e(
                             TAG,
-                            " exception occurred while accessing $currentCameraId",
+                            " exception occurred while accessing $cameraId",
                             e
                         )
                     }
@@ -258,8 +264,8 @@ class PictureCapturingService(val activity: Activity, val projectName: String) {
 
     private fun createImageFile(): File {
         // Create an image file name
-        val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss").format(Date())
-        val storageDir = context.getExternalFilesDir(projectName)
+        val timeStamp: String = SimpleDateFormat("yyMMdd_HHmmss").format(Date())
+        val storageDir = context.getExternalFilesDir(projectName.get())
         return File(
             storageDir,
             "${timeStamp}.jpg"

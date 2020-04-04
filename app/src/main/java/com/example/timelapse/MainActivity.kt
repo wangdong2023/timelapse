@@ -1,15 +1,19 @@
 package com.example.timelapse
 
+import android.annotation.SuppressLint
 import android.annotation.TargetApi
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.*
 import android.widget.Button
+import android.widget.EditText
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import java.text.SimpleDateFormat
+import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -18,22 +22,39 @@ import java.util.concurrent.atomic.AtomicReference
 @RequiresApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
 class MainActivity : AppCompatActivity() {
     val REQUEST_CODE_AUDIO_PERMISSION = 1
-    private val takePicture: AtomicBoolean = AtomicBoolean(false)
-    private val projectName: AtomicReference<String> = AtomicReference("test_project")
-    private var audioIn: AudioIn = AudioIn(440.0, 0.1f, takePicture)
+    val projectName = AtomicReference<String>("test_${SimpleDateFormat("yyMMddHH").format(Date())}")
+    val takePicture = AtomicBoolean(false)
+    val recordAudio = AtomicBoolean(false)
+    val audioIn = AudioIn(440.0, 1, takePicture, recordAudio)
+    private val pictureRun = PictureHandlerThread(this, takePicture, projectName)
 
+    @SuppressLint("SimpleDateFormat")
     override fun onCreate(savedInstanceState: Bundle?) {
+        println("Main thread runs in ${Thread.currentThread().id}")
         super.onCreate(savedInstanceState)
+
         setContentView(R.layout.activity_main)
-        val pictureRun = PictureHandlerThread(this, takePicture, projectName)
 
         println("OUTSIDE PERMISSIONS CHECK")
         ensurePermissionAllowed()
 
-        val button = findViewById<Button>(R.id.record)
+        val recordButton = findViewById<Button>(R.id.record)
+        val stopButton = findViewById<Button>(R.id.stop)
 
-        button.setOnClickListener {
-            audioIn.startStop()
+        recordButton.setOnClickListener {
+            recordButton.isEnabled = false
+            val targetFrequency = (findViewById<EditText>(R.id.target_frequency)).text.toString().toDoubleOrNull()
+            audioIn.targetFrequency = targetFrequency?:440.0
+            projectName.set("${(findViewById<EditText>(R.id.target_frequency)).text}_" +
+                    SimpleDateFormat("yyyyMMddHH").format(Date()))
+            recordAudio.set(true)
+            stopButton.isEnabled = true
+        }
+
+        stopButton.setOnClickListener {
+            stopButton.isEnabled = false
+            recordAudio.set(false)
+            recordButton.isEnabled = true
         }
         pictureRun.start()
         audioIn.start()
@@ -41,11 +62,10 @@ class MainActivity : AppCompatActivity() {
 
     private class PictureHandlerThread(val activity: Activity, val takePicture: AtomicBoolean, val projectName: AtomicReference<String>): Thread() {
         override fun  run() {
-            val pictureCapturingService = PictureCapturingService(activity, projectName.get())
-
             Looper.prepare()
 
             val mHandler = Handler()
+            val pictureCapturingService = PictureCapturingService(activity, projectName)
             val pictureRun = PictureRun(Process.THREAD_PRIORITY_MORE_FAVORABLE, pictureCapturingService, takePicture, mHandler)
 
             pictureRun.start()
@@ -60,7 +80,7 @@ class MainActivity : AppCompatActivity() {
 //                println("Running picture thread ${currentThread().id}")
                 if (!takePicture.get()) {
 //                    println("Sleeping")
-                    sleep(500)
+                    sleep(2000)
                 } else {
                     println("Taking picture ${Thread.currentThread().id}")
                     pictureCapturingService.startCapturing()
@@ -68,9 +88,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 handler.post(PictureRun(threadPriority, pictureCapturingService, takePicture, handler))
             } catch (e: Exception) {
-                println("Something happed ${Thread.currentThread().id}")
                 println(e.message)
-                throw e
             }
         }
     }

@@ -10,18 +10,19 @@ import org.apache.commons.math3.transform.TransformType
 import java.util.concurrent.atomic.AtomicBoolean
 
 
-class AudioIn(val targetFrequency: Double, private val tolerance: Float, val takePicture: AtomicBoolean): Thread() {
+class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takePicture: AtomicBoolean, val recordAudio: AtomicBoolean): Thread() {
     val SAMPLING_RATE = 44100
+    val PROCESSING_INTERVAL = 10
 
-    private var stopped = true
     val bufferSize = AudioRecord.getMinBufferSize(
         SAMPLING_RATE,
         AudioFormat.CHANNEL_IN_MONO,
         AudioFormat.ENCODING_PCM_16BIT
     )
-    val sampleBufferSize = 512
+    val sampleBufferSize = 1024
+    val resolution = SAMPLING_RATE * 1.0 / sampleBufferSize
     val buffers =
-        Array(256) { ShortArray(sampleBufferSize) }
+        Array(200) { ShortArray(sampleBufferSize) }
     var lastBuffer = 0
 
     val recorder = AudioRecord(
@@ -38,11 +39,10 @@ class AudioIn(val targetFrequency: Double, private val tolerance: Float, val tak
         recorder.setRecordPositionUpdateListener(object :
             AudioRecord.OnRecordPositionUpdateListener {
             override fun onPeriodicNotification(recorder: AudioRecord) {
-//                println("last buffer ${lastBuffer}, ${currentThread().id}")
                 val buffer: ShortArray = buffers.get(++lastBuffer % buffers.size)
                 recorder.read(buffer, 0, sampleBufferSize)
-                if (lastBuffer % 5 == 0) {
-                    process(buffer)
+                if (lastBuffer % PROCESSING_INTERVAL == 0) {
+                    process(buffer, lastBuffer)
                 }
             }
 
@@ -50,47 +50,37 @@ class AudioIn(val targetFrequency: Double, private val tolerance: Float, val tak
         })
     }
 
-    public fun startStop() {
-        if (stopped) {
-            println("Starting ${currentThread().id}")
-            stopped = false
-            recorder.startRecording()
-        } else {
-            println("Stopping")
-            recorder.stop()
-            stopped = true
-        }
-    }
-
-    public fun getIsRunning(): Boolean {
-        return !stopped
-    }
-
     override fun run() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_MORE_FAVORABLE)
+        println("Audio thread runs in ${currentThread().id}")
         while(true) {
-            if (stopped) {
+            if (!recordAudio.get()) {
+                if (recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    recorder.stop()
+                    lastBuffer = 0
+                }
                 sleep(500)
+            } else {
+                if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    println("Starting ${currentThread().id}, target frequency ${targetFrequency}, resolution: ${resolution}Hz")
+                    recorder.startRecording()
+                }
             }
         }
     }
 
-    private fun process(buffer: ShortArray){
-//        println("processing, ${currentThread().id}")
+    private fun process(buffer: ShortArray, index: Int){
         val ffts = transformer.transform(buffer.map{it.toDouble()}.toDoubleArray(), TransformType.FORWARD)
-        val magnitudes = ffts.map { Math.log10(Math.hypot(it.real, it.imaginary)) }
-        val frequencies = magnitudes.mapIndexed { index, d -> index * SAMPLING_RATE * 1.0 / sampleBufferSize }
-//            println(buffer.joinToString(","))
-        var max = 0.0
-        var maxFreq = -1.0
-        for (i in 0 .. sampleBufferSize - 1) {
-            if (magnitudes[i] > max) {
-                max = magnitudes[i]
-                maxFreq = frequencies[i]
-            }
-        }
+        val magnitudes = ffts.mapIndexed{ index, cp -> Pair(index * resolution, Math.log10(Math.hypot(cp.real, cp.imaginary))) }
+            .sortedByDescending { p -> p.second }
 
-        if (maxFreq > targetFrequency * (1 - tolerance) && maxFreq < targetFrequency * (1 + tolerance)) {
+        val k = 3
+
+        println("Thread ${currentThread().id}, ${index}th processing, " +
+                "top ${k} frequencies are ${magnitudes.slice(0 until k).map { p -> p.first }.joinToString(",")}, " +
+                "with magnitudes ${magnitudes.slice(0 until k).map { p -> p.second }.joinToString(",")}")
+
+        if (magnitudes[0].first > (targetFrequency - tolerance * resolution) && magnitudes[0].first < (targetFrequency + tolerance * resolution)) {
             println("Taking a picture")
             takePicture.set(true)
         }
@@ -98,6 +88,6 @@ class AudioIn(val targetFrequency: Double, private val tolerance: Float, val tak
 
     private fun close() {
         recorder.stop()
-        stopped = true
+        recordAudio.set(false)
     }
 }
