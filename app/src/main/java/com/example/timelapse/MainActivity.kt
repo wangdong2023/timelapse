@@ -1,7 +1,6 @@
 package com.example.timelapse
 
 import android.annotation.TargetApi
-import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.*
 import android.view.WindowManager
@@ -26,9 +25,15 @@ class MainActivity : AppCompatActivity() {
     val takePicture = AtomicBoolean(false)
     val recordAudio = AtomicBoolean(false)
     val audioIn = AudioIn(DEFAULT_TARGENT_FREQUENCE, 3, takePicture, recordAudio)
-    private val pictureRun = PictureHandlerThread(this, takePicture, projectName)
+    private val pictureHandlerThread = HandlerThread("picture")
+    private var pictureCapturingService: PictureCapturingService? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        pictureHandlerThread.start()
+        val pictureHandler = Handler(pictureHandlerThread.getLooper())
+        pictureCapturingService = PictureCapturingService(this, projectName, pictureHandler)
+        val pictureRun = PictureRun(pictureCapturingService!!, takePicture)
+
         println("Main thread runs in ${Thread.currentThread().id}")
         super.onCreate(savedInstanceState)
 
@@ -48,47 +53,35 @@ class MainActivity : AppCompatActivity() {
             val pName = (findViewById<EditText>(R.id.target_frequency)).text
             projectName.set("${if(pName.isNotEmpty()) pName else DEFAULT_PROJECT_NAME}_${TimeService.getForDirectory()}")
             recordAudio.set(true)
+            pictureCapturingService!!.openCamera()
             stopButton.isEnabled = true
         }
 
         stopButton.setOnClickListener {
             stopButton.isEnabled = false
             recordAudio.set(false)
+            pictureCapturingService!!.closeCamera()
             recordButton.isEnabled = true
         }
-        pictureRun.start()
+
         audioIn.start()
+        pictureRun.start()
     }
 
-    private class PictureHandlerThread(val activity: Activity, val takePicture: AtomicBoolean, val projectName: AtomicReference<String>): Thread() {
-        override fun  run() {
-            Looper.prepare()
-
-            val mHandler = Handler()
-            val pictureCapturingService = PictureCapturingService(activity, projectName)
-            val pictureRun = PictureRun(Process.THREAD_PRIORITY_MORE_FAVORABLE, pictureCapturingService, takePicture, mHandler)
-
-            pictureRun.start()
-            Looper.loop()
-        }
-    }
-
-    private class PictureRun(val threadPriority: Int, val pictureCapturingService: PictureCapturingService, val takePicture: AtomicBoolean, val handler: Handler): Thread() {
+    private class PictureRun(val pictureCapturingService: PictureCapturingService, val takePicture: AtomicBoolean): Thread() {
         override fun run() {
-            Process.setThreadPriority(threadPriority)
-            try {
-//                println("Running picture thread ${currentThread().id}")
-                if (!takePicture.get()) {
-//                    println("Sleeping")
-                    sleep(2000)
-                } else {
-                    println("Taking picture ${Thread.currentThread().id}")
-                    pictureCapturingService.startCapturing()
-                    takePicture.set(false)
+            Process.setThreadPriority(Process.THREAD_PRIORITY_MORE_FAVORABLE)
+            while (true) {
+                try {
+                    if (!takePicture.get()) {
+                        sleep(500)
+                    } else {
+                        takePicture.set(false)
+                        pictureCapturingService.capture()
+                    }
+                } catch (e: Exception) {
+                    println(e.message)
                 }
-                handler.post(PictureRun(threadPriority, pictureCapturingService, takePicture, handler))
-            } catch (e: Exception) {
-                println(e.message)
             }
         }
     }
