@@ -57,6 +57,7 @@ class PictureCapturingService(val activity: Activity, val projectName: AtomicRef
             val buffer = image.planes[0].buffer
             val bytes = ByteArray(buffer.capacity())
             buffer[bytes]
+            println("Got image at ${TimeService.getForLog()}")
             saveImageToDisk(bytes)
             image.close()
         }
@@ -119,7 +120,7 @@ class PictureCapturingService(val activity: Activity, val projectName: AtomicRef
     }
 
     private fun openCamera() {
-        println("Opening camera")
+        println("Opening camera ${TimeService.getForLog()}")
 
         try {
             if (ActivityCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
@@ -157,13 +158,12 @@ class PictureCapturingService(val activity: Activity, val projectName: AtomicRef
     private val stateCallback: CameraDevice.StateCallback = object : CameraDevice.StateCallback() {
         override fun onOpened(camera: CameraDevice) {
             cameraClosed = false
-            Log.d(
-                TAG,
-                "camera " + camera.id + " opened"
+            Log.i(
+                this.javaClass.simpleName,
+                "camera " + camera.id + " opened" + " ${TimeService.getForLog()}"
             )
             cameraDevice = camera
 
-            println("Taking picture from camera " + camera.id)
             //Take the picture after some delay. It may resolve getting a black dark photos.
             Handler().postDelayed({
                 try {
@@ -230,6 +230,7 @@ class PictureCapturingService(val activity: Activity, val projectName: AtomicRef
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     try {
+                        println("Session configured ${TimeService.getForLog()}")
                         session.capture(captureBuilder.build(), captureListener, null)
                     } catch (e: CameraAccessException) {
                         Log.e(
@@ -264,11 +265,10 @@ class PictureCapturingService(val activity: Activity, val projectName: AtomicRef
 
     private fun createImageFile(): File {
         // Create an image file name
-        val timeStamp: String = SimpleDateFormat("yyMMdd_HHmmss").format(Date())
         val storageDir = context.getExternalFilesDir(projectName.get())
         return File(
             storageDir,
-            "${timeStamp}.jpg"
+            "${TimeService.getForFile()}.jpg"
         )
     }
 

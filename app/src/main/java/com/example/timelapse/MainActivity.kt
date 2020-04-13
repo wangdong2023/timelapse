@@ -1,10 +1,10 @@
 package com.example.timelapse
 
-import android.annotation.SuppressLint
 import android.annotation.TargetApi
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.*
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
@@ -12,8 +12,6 @@ import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import java.text.SimpleDateFormat
-import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -21,19 +19,21 @@ import java.util.concurrent.atomic.AtomicReference
 @TargetApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
 @RequiresApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
 class MainActivity : AppCompatActivity() {
+    val DEFAULT_PROJECT_NAME = "test"
+    val DEFAULT_TARGENT_FREQUENCE = 220.0
     val REQUEST_CODE_AUDIO_PERMISSION = 1
-    val projectName = AtomicReference<String>("test_${SimpleDateFormat("yyMMddHH").format(Date())}")
+    val projectName = AtomicReference<String>("test_${TimeService.getForDirectory()}")
     val takePicture = AtomicBoolean(false)
     val recordAudio = AtomicBoolean(false)
-    val audioIn = AudioIn(440.0, 1, takePicture, recordAudio)
+    val audioIn = AudioIn(DEFAULT_TARGENT_FREQUENCE, 3, takePicture, recordAudio)
     private val pictureRun = PictureHandlerThread(this, takePicture, projectName)
 
-    @SuppressLint("SimpleDateFormat")
     override fun onCreate(savedInstanceState: Bundle?) {
         println("Main thread runs in ${Thread.currentThread().id}")
         super.onCreate(savedInstanceState)
 
         setContentView(R.layout.activity_main)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         println("OUTSIDE PERMISSIONS CHECK")
         ensurePermissionAllowed()
@@ -44,9 +44,9 @@ class MainActivity : AppCompatActivity() {
         recordButton.setOnClickListener {
             recordButton.isEnabled = false
             val targetFrequency = (findViewById<EditText>(R.id.target_frequency)).text.toString().toDoubleOrNull()
-            audioIn.targetFrequency = targetFrequency?:440.0
-            projectName.set("${(findViewById<EditText>(R.id.target_frequency)).text}_" +
-                    SimpleDateFormat("yyyyMMddHH").format(Date()))
+            audioIn.targetFrequency = targetFrequency?: DEFAULT_TARGENT_FREQUENCE
+            val pName = (findViewById<EditText>(R.id.target_frequency)).text
+            projectName.set("${if(pName.isNotEmpty()) pName else DEFAULT_PROJECT_NAME}_${TimeService.getForDirectory()}")
             recordAudio.set(true)
             stopButton.isEnabled = true
         }
