@@ -3,10 +3,10 @@ package com.example.timelapse
 import android.Manifest
 import android.annotation.TargetApi
 import android.app.Activity
-import android.content.ContentValues.TAG
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
+import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
 import android.hardware.camera2.CameraCaptureSession.CaptureCallback
 import android.hardware.camera2.CameraDevice.StateCallback
@@ -26,14 +26,8 @@ import java.io.IOException
 import java.util.concurrent.atomic.AtomicReference
 
 
-/**
- * The aim of this service is to secretly take pictures (without preview or opening device's camera app)
- * from all available cameras using Android Camera 2 API
- *
- * @author hzitoun (zitoun.hamed@gmail.com)
- */
-@TargetApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
-@RequiresApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
+@TargetApi(Build.VERSION_CODES.LOLLIPOP)
+@RequiresApi(Build.VERSION_CODES.LOLLIPOP)
 class PictureCapturingService(private val activity: Activity, private val projectName: AtomicReference<String>, private val handler: Handler? = null) {
     private val ORIENTATIONS = SparseIntArray()
 
@@ -45,22 +39,29 @@ class PictureCapturingService(private val activity: Activity, private val projec
     }
     private var cameraDevice: CameraDevice? = null
 
+    enum class CameraState {
+        CLOSED, OPEN, READY, LOCKING_FOCUS, PRE_CAPTURING, CAPTURING
+    }
+
     private var cameraId: String? = null
-    private var cameraIdle = true
+    private var cameraState = CameraState.CLOSED
     private var reader: ImageReader
     private var cameraCaptureSession: CameraCaptureSession? = null
 
-    private val onImageAvailableListener =
-        OnImageAvailableListener { imReader: ImageReader ->
-            val image = imReader.acquireLatestImage()
-            val buffer = image.planes[0].buffer
-            val bytes = ByteArray(buffer.capacity())
-            // buffer.get(bytes)
-            buffer[bytes]
-            Log.i(this.javaClass.simpleName, "Got image at ${TimeService.getForLog()}")
-            saveImageToDisk(bytes)
-            image.close()
-        }
+    private val dummyPreview = SurfaceTexture(1)
+    private val dummySurface = Surface(dummyPreview)
+    private var flashSupported = false
+
+    private val onImageAvailableListener = OnImageAvailableListener { imReader: ImageReader ->
+        val image = imReader.acquireLatestImage()
+        val buffer = image.planes[0].buffer
+        val bytes = ByteArray(buffer.capacity())
+        // buffer.get(bytes)
+        buffer[bytes]
+        Log.i(this.javaClass.simpleName, "Got image at ${TimeService.getForLog()}")
+        saveImageToDisk(bytes)
+        image.close()
+    }
 
     var context = activity.applicationContext
     var manager: CameraManager
@@ -73,9 +74,12 @@ class PictureCapturingService(private val activity: Activity, private val projec
             characteristics = manager.getCameraCharacteristics(cid)
             if (characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) {
                 cameraId = cid
+                flashSupported = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
                 break
             }
         }
+
+
         if (cameraId == null) {
             throw RuntimeException("No backward camera")
         }
@@ -93,32 +97,36 @@ class PictureCapturingService(private val activity: Activity, private val projec
         val height = if (jpegSizes.isNotEmpty()) jpegSizes[0].height else 480
 
         Log.i(this.javaClass.simpleName, "Image size is ${width} * ${height}")
-        reader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 5)
+        reader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 2)
         reader.setOnImageAvailableListener(onImageAvailableListener, handler)
-
     }
 
-    /**
-     * Starts pictures capturing treatment.
-     *
-     * @param listener picture capturing listener
-     */
     fun capture() {
-        if (!cameraIdle) {
-            Log.i(this.javaClass.simpleName, "Camera in use, skip this picture")
+        if (cameraState != CameraState.READY) {
+            Log.i(this.javaClass.simpleName, "Camera not ready, skip this picture")
         } else {
-            takePicture()
+            captureStillPicture()
         }
     }
 
     private fun openCameraSession() {
         cameraDevice!!.createCaptureSession(
-            listOf(reader.surface),
+            listOf(reader.surface, dummySurface),
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     try {
                         Log.i(this.javaClass.simpleName, "Session configured ${TimeService.getForLog()}")
                         cameraCaptureSession = session
+                        cameraState = CameraState.OPEN
+                        val previewRequestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                        previewRequestBuilder.addTarget(dummySurface)
+                        // Auto focus should be continuous for camera preview.
+                        previewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE,
+                            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                        // Flash is automatically enabled when necessary.
+                        setAutoFlash(previewRequestBuilder)
+                        cameraCaptureSession?.setRepeatingRequest(previewRequestBuilder.build(), captureCallback, handler)
+                        runPrecaptureSequence()
                     } catch (e: CameraAccessException) {
                         Log.e(this.javaClass.simpleName, "Exception while accessing $cameraId", e)
                     }
@@ -132,10 +140,12 @@ class PictureCapturingService(private val activity: Activity, private val projec
     fun closeCamera() {
         Log.d(this.javaClass.simpleName, "closing camera " + cameraDevice!!.id)
         if (null != cameraDevice) {
+            if (null != cameraCaptureSession) {
+                cameraCaptureSession!!.close()
+            }
             cameraDevice!!.close()
             cameraDevice = null
         }
-        cameraIdle = true
     }
 
     fun openCamera() {
@@ -154,20 +164,21 @@ class PictureCapturingService(private val activity: Activity, private val projec
 
                     override fun onDisconnected(camera: CameraDevice) {
                         Log.d(this.javaClass.simpleName, " camera " + camera.id + " disconnected")
-                        if (cameraDevice != null && !cameraIdle) {
-                            cameraIdle = true
+                        if (cameraDevice != null) {
+                            cameraState = CameraState.CLOSED
                             cameraDevice!!.close()
                         }
                     }
 
                     override fun onClosed(camera: CameraDevice) {
-                        cameraIdle = true
                         Log.d(this.javaClass.simpleName, "camera " + camera.id + " closed")
+                        cameraState = CameraState.CLOSED
                     }
 
                     override fun onError(camera: CameraDevice, error: Int) {
                         Log.e(this.javaClass.simpleName, "camera in error, int code $error")
-                        if (cameraDevice != null && !cameraIdle) {
+                        if (cameraDevice != null) {
+                            cameraState = CameraState.CLOSED
                             cameraDevice!!.close()
                         }
                     }
@@ -180,12 +191,46 @@ class PictureCapturingService(private val activity: Activity, private val projec
         }
     }
 
-    private val captureListener: CaptureCallback = object : CaptureCallback() {
+    private val captureCallback: CaptureCallback = object : CaptureCallback() {
+        override fun onCaptureCompleted(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            result: TotalCaptureResult
+        ) {
+            when (cameraState) {
+                CameraState.PRE_CAPTURING -> {
+                    val afState = result.get(CaptureResult.CONTROL_AF_STATE)
+                    if (afState == null) {
+                        Log.i(this.javaClass.simpleName, "AF null, Direct still capture")
+                        cameraState = CameraState.READY
+                        cameraCaptureSession!!.stopRepeating()
+                    } else if (afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED
+                        || afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) {
+                        // CONTROL_AE_STATE can be null on some devices
+                        val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                        if (aeState == null || aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED) {
+                            Log.i(this.javaClass.simpleName, "AE null or converged, still capture")
+                            cameraState = CameraState.READY
+                            cameraCaptureSession!!.stopRepeating()
+                        } else {
+                            Log.i(this.javaClass.simpleName, "AE not ready")
+                        }
+                    }
+                }
+                else -> {
+                    Log.i(this.javaClass.simpleName, "None capture state ${cameraState}")
+                }
+            }
+        }
+    }
+
+    private val stillCaptureCallback: CaptureCallback = object : CaptureCallback() {
         override fun onCaptureCompleted(
             session: CameraCaptureSession, request: CaptureRequest,
             result: TotalCaptureResult) {
-            super.onCaptureCompleted(session, request, result)
-            cameraIdle = true
+
+            Log.i(this.javaClass.simpleName, "Camera state ${cameraState}")
+            cameraState = CameraState.READY
         }
     }
 
@@ -194,18 +239,16 @@ class PictureCapturingService(private val activity: Activity, private val projec
         return ORIENTATIONS.get(rotation)
     }
 
-    private fun takePicture() {
-        if (null == cameraCaptureSession) {
-            openCamera()
-            Log.e(this.javaClass.simpleName, "camera session is null, re-initialing")
-            return
+    private fun captureStillPicture() {
+        val captureBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+            addTarget(reader.surface)
+            set(CaptureRequest.JPEG_ORIENTATION, getOrientation())
+            // Use the same AE and AF modes as the preview.
+            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
         }
+        cameraState = CameraState.CAPTURING
 
-        val captureBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-        captureBuilder.addTarget(reader.surface)
-        captureBuilder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
-        captureBuilder[CaptureRequest.JPEG_ORIENTATION] = getOrientation()
-        cameraCaptureSession!!.capture(captureBuilder.build(), captureListener, handler)
+        cameraCaptureSession!!.capture(captureBuilder.build(), stillCaptureCallback, handler)
     }
 
     private fun saveImageToDisk(bytes: ByteArray) {
@@ -221,8 +264,56 @@ class PictureCapturingService(private val activity: Activity, private val projec
     }
 
     private fun createImageFile(): File {
-        // Create an image file name
         val storageDir = context.getExternalFilesDir(projectName.get())
         return File(storageDir, "${TimeService.getForFile()}.jpg")
+    }
+
+    /**
+     * Lock the focus as the first step for a still image capture.
+     */
+    private fun lockFocus() {
+        try {
+            val previewRequestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            previewRequestBuilder.addTarget(dummySurface)
+            // This is how to tell the camera to lock focus.
+            previewRequestBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER,
+                CameraMetadata.CONTROL_AF_TRIGGER_START)
+            setAutoFlash(previewRequestBuilder)
+            // Tell #captureCallback to wait for the lock.
+            cameraState = CameraState.LOCKING_FOCUS
+//            Log.i(this.javaClass.simpleName, "locking focus")
+
+            cameraCaptureSession?.capture(previewRequestBuilder.build(), captureCallback, handler)
+        } catch (e: CameraAccessException) {
+            Log.e(this.javaClass.simpleName, e.toString())
+        }
+    }
+
+    /**
+     * Run the precapture sequence for capturing a still image. This method should be called when
+     * we get a response in [.captureCallback] from [.lockFocus].
+     */
+    private fun runPrecaptureSequence() {
+        try {
+            val previewRequestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            previewRequestBuilder.addTarget(dummySurface)
+            // This is how to tell the camera to trigger.
+            previewRequestBuilder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START)
+            previewRequestBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER,
+                CameraMetadata.CONTROL_AF_TRIGGER_START)
+            setAutoFlash(previewRequestBuilder)
+            // Tell #captureCallback to wait for the precapture sequence to be set.
+            cameraState = CameraState.PRE_CAPTURING
+            cameraCaptureSession?.capture(previewRequestBuilder.build(), object : CaptureCallback() {}, handler)
+        } catch (e: CameraAccessException) {
+            Log.e(this.javaClass.simpleName, e.toString())
+        }
+    }
+
+    private fun setAutoFlash(requestBuilder: CaptureRequest.Builder) {
+        if (flashSupported) {
+            requestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+        }
     }
 }

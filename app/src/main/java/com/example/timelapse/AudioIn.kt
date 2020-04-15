@@ -9,13 +9,12 @@ import org.apache.commons.math3.transform.FastFourierTransformer
 import org.apache.commons.math3.transform.TransformType
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.hypot
-import kotlin.math.log2
 import kotlin.math.min
 
 
 class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takePicture: AtomicBoolean, val recordAudio: AtomicBoolean): Thread() {
     val SAMPLING_RATE = 44100
-    val PROCESSING_INTERVAL = 10
+    val PROCESSING_INTERVAL = 30
 
     val bufferSize = AudioRecord.getMinBufferSize(
         SAMPLING_RATE,
@@ -79,7 +78,7 @@ class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takeP
 //        println(buffer.joinToString(","))
 //        println(ffts.joinToString(","))
         val magnitudes = ffts.slice(0 until buffer.size / 2 + 1)
-            .mapIndexed{ ind, cp -> Pair(ind * resolution, log2(hypot(cp.real, cp.imaginary))) }
+            .mapIndexed{ ind, cp -> Pair(ind * resolution, hypot(cp.real, cp.imaginary)) }
 
         val peaks = findPeak(magnitudes)
             .sortedByDescending { p -> p.second }
@@ -88,9 +87,9 @@ class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takeP
 
         val k = min(5, peaks.size)
 
-        println("Thread ${currentThread().id}, ${index}th processing, " +
-                "top ${k} frequencies are ${peaks.slice(0 until k).map { p -> p.first }.joinToString(",")}, " +
-                "with magnitudes ${peaks.slice(0 until k).map { p -> p.second }.joinToString(",")}")
+//        println("Thread ${currentThread().id}, ${index}th processing, " +
+//                "top ${k} frequencies are ${peaks.slice(0 until k).map { p -> p.first }.joinToString(",")}, " +
+//                "with magnitudes ${peaks.slice(0 until k).map { p -> p.second }.joinToString(",")}")
 
         for (peak in peaks.slice(0 until k)) {
             if (peak.first > (targetFrequency - tolerance * resolution) && peak.first < (targetFrequency + tolerance * resolution)) {
