@@ -18,6 +18,7 @@ import android.util.Log
 import android.util.Size
 import android.util.SparseIntArray
 import android.view.Surface
+import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.core.app.ActivityCompat
 import java.io.File
@@ -257,7 +258,8 @@ class PictureCapturingService(private val activity: Activity, private val projec
             FileOutputStream(file).use { output ->
                 output.write(bytes)
             }
-            Log.i(this.javaClass.simpleName, "Image created at ${file.absolutePath}")
+            val toast = Toast.makeText(activity.applicationContext, "Image captured at ${file.absolutePath}", Toast.LENGTH_SHORT)
+            toast.show()
         } catch (e: IOException) {
             Log.e(this.javaClass.simpleName, "Exception while saving picture", e)
         }

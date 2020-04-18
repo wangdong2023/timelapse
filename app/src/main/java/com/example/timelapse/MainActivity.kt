@@ -17,16 +17,15 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.schedule
 
 
-@TargetApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
-@RequiresApi(Build.VERSION_CODES.LOLLIPOP) //NOTE: camera 2 api was added in API level 21
+@TargetApi(Build.VERSION_CODES.LOLLIPOP)
+@RequiresApi(Build.VERSION_CODES.LOLLIPOP)
 class MainActivity : AppCompatActivity() {
     val DEFAULT_PROJECT_NAME = "test"
-    val DEFAULT_TARGENT_FREQUENCE = 3500.0
+    val DEFAULT_TARGET_FREQUENCE = 3500.0
     val REQUEST_CODE_AUDIO_PERMISSION = 1
     val projectName = AtomicReference<String>("${DEFAULT_PROJECT_NAME}_${TimeService.getForDirectory()}")
     val takePicture = AtomicBoolean(false)
-    val recordAudio = AtomicBoolean(false)
-    val audioIn = AudioIn(DEFAULT_TARGENT_FREQUENCE, 3, takePicture, recordAudio)
+    val audioIn = AudioIn(DEFAULT_TARGET_FREQUENCE, 3, takePicture)
     private val pictureHandlerThread = HandlerThread("picture")
     private var pictureCapturingService: PictureCapturingService? = null
 
@@ -52,23 +51,22 @@ class MainActivity : AppCompatActivity() {
             recordButton.isEnabled = false
             pictureCapturingService!!.openCamera()
             val targetFrequency = (findViewById<EditText>(R.id.target_frequency)).text.toString().toDoubleOrNull()
-            audioIn.targetFrequency = targetFrequency?: DEFAULT_TARGENT_FREQUENCE
+            audioIn.targetFrequency = targetFrequency?: DEFAULT_TARGET_FREQUENCE
             val pName = (findViewById<EditText>(R.id.target_frequency)).text
             projectName.set("${if(pName.isNotEmpty()) pName else DEFAULT_PROJECT_NAME}_${TimeService.getForDirectory()}")
             Timer("start", false).schedule(3000) {
-                recordAudio.set(true)
+                audioIn.startRecording()
             }
             stopButton.isEnabled = true
         }
 
         stopButton.setOnClickListener {
             stopButton.isEnabled = false
-            recordAudio.set(false)
+            audioIn.stopRecording()
             pictureCapturingService!!.closeCamera()
             recordButton.isEnabled = true
         }
 
-        audioIn.start()
         pictureRun.start()
     }
 

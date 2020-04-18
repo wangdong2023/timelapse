@@ -1,9 +1,13 @@
 package com.example.timelapse
 
+import android.annotation.TargetApi
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.os.Process
+import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import androidx.annotation.RequiresApi
 import org.apache.commons.math3.transform.DftNormalization
 import org.apache.commons.math3.transform.FastFourierTransformer
 import org.apache.commons.math3.transform.TransformType
@@ -12,7 +16,9 @@ import kotlin.math.hypot
 import kotlin.math.min
 
 
-class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takePicture: AtomicBoolean, val recordAudio: AtomicBoolean): Thread() {
+@TargetApi(Build.VERSION_CODES.LOLLIPOP)
+@RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takePicture: AtomicBoolean) {
     val SAMPLING_RATE = 44100
     val PROCESSING_INTERVAL = 30
 
@@ -21,6 +27,11 @@ class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takeP
         AudioFormat.CHANNEL_IN_MONO,
         AudioFormat.ENCODING_PCM_16BIT
     )
+
+    private var backgroundThread: HandlerThread? = null
+
+    private var backgroundHandler: Handler? = null
+
     val sampleBufferSize = 2048
     val resolution = SAMPLING_RATE * 1.0 / sampleBufferSize
     val buffers =
@@ -36,7 +47,10 @@ class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takeP
     )
     val transformer = FastFourierTransformer(DftNormalization.STANDARD)
 
-    init {
+    fun startRecording() {
+        startBackgroundThread()
+        println("Starting recording, target frequency ${targetFrequency}, resolution: ${resolution}Hz, bufferSize: ${bufferSize}")
+
         recorder.setPositionNotificationPeriod(sampleBufferSize)
         recorder.setRecordPositionUpdateListener(object :
             AudioRecord.OnRecordPositionUpdateListener {
@@ -44,36 +58,33 @@ class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takeP
                 val buffer: ShortArray = buffers.get(++lastBuffer % buffers.size)
                 recorder.read(buffer, 0, sampleBufferSize)
                 if (lastBuffer % PROCESSING_INTERVAL == (PROCESSING_INTERVAL - 1)) {
-                    process(buffer, lastBuffer)
+                    process(buffer)
                 }
             }
 
             override fun onMarkerReached(recorder: AudioRecord) {}
-        })
+        }, backgroundHandler)
+        recorder.startRecording()
     }
 
-    override fun run() {
-        Process.setThreadPriority(Process.THREAD_PRIORITY_MORE_FAVORABLE)
-        println("Audio thread runs in ${currentThread().id}")
-        while(true) {
-            if (!recordAudio.get()) {
-                if (recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                    recorder.stop()
-                    lastBuffer = 0
-                }
-                sleep(500)
-            } else {
-                if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                    println(recorder.recordingState)
-                    println("Starting ${currentThread().id}, target frequency ${targetFrequency}, resolution: ${resolution}Hz, bufferSize: ${bufferSize}")
-                    recorder.startRecording()
-                }
-            }
+    private fun startBackgroundThread() {
+        backgroundThread = HandlerThread("AudioBackground").also { it.start() }
+        backgroundHandler = Handler(backgroundThread?.looper)
+    }
+
+    private fun stopBackgroundThread() {
+        backgroundThread?.quitSafely()
+        try {
+            backgroundThread?.join()
+            backgroundThread = null
+            backgroundHandler = null
+        } catch (e: InterruptedException) {
+            println(e.toString())
         }
     }
 
-    private fun process(buffer: ShortArray, index: Int){
-        val movingAve = movingAve(buffer, 2)
+    private fun process(buffer: ShortArray){
+        val movingAve = movingAve(buffer)
         val ffts = transformer.transform(movingAve, TransformType.FORWARD)
 //        println(buffer.joinToString(","))
 //        println(ffts.joinToString(","))
@@ -85,7 +96,7 @@ class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takeP
 //        println(magnitudes.joinToString(","))
 //        println("average is ${magnitudes.map { p -> p.second }.sum() / magnitudes.size}, find ${peaks.size} peaks")
 
-        val k = min(5, peaks.size)
+        val k = min(8, peaks.size)
 
 //        println("Thread ${currentThread().id}, ${index}th processing, " +
 //                "top ${k} frequencies are ${peaks.slice(0 until k).map { p -> p.first }.joinToString(",")}, " +
@@ -112,7 +123,7 @@ class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takeP
         return res;
     }
 
-    private fun movingAve(buffer: ShortArray, windowSize: Int): DoubleArray {
+    private fun movingAve(buffer: ShortArray, windowSize: Int = 2): DoubleArray {
         val ave = DoubleArray(buffer.size)
         for (i in 0 until buffer.size) {
             val start = if (i - windowSize > 0) (i - windowSize) else 0
@@ -122,8 +133,8 @@ class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takeP
         return ave
     }
 
-    private fun close() {
+    fun stopRecording() {
         recorder.stop()
-        recordAudio.set(false)
+        stopBackgroundThread()
     }
 }
