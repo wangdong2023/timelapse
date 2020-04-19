@@ -1,4 +1,4 @@
-package com.example.timelapse
+package com.shallow_mind.timelapse
 
 import android.annotation.TargetApi
 import android.content.pm.PackageManager
@@ -52,7 +52,7 @@ class MainActivity : AppCompatActivity() {
             pictureCapturingService!!.openCamera()
             val targetFrequency = (findViewById<EditText>(R.id.target_frequency)).text.toString().toDoubleOrNull()
             audioIn.targetFrequency = targetFrequency?: DEFAULT_TARGET_FREQUENCE
-            val pName = (findViewById<EditText>(R.id.target_frequency)).text
+            val pName = (findViewById<EditText>(R.id.project_name)).text
             projectName.set("${if(pName.isNotEmpty()) pName else DEFAULT_PROJECT_NAME}_${TimeService.getForDirectory()}")
             Timer("start", false).schedule(3000) {
                 audioIn.startRecording()

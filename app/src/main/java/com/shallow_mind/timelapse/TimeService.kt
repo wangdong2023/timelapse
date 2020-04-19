@@ -1,4 +1,4 @@
-package com.example.timelapse
+package com.shallow_mind.timelapse
 
 import android.annotation.SuppressLint
 import java.text.SimpleDateFormat

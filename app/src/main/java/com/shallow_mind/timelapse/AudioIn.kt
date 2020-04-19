@@ -1,4 +1,4 @@
-package com.example.timelapse
+package com.shallow_mind.timelapse
 
 import android.annotation.TargetApi
 import android.media.AudioFormat
@@ -20,7 +20,7 @@ import kotlin.math.min
 @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
 class AudioIn(var targetFrequency: Double, private val tolerance: Int, val takePicture: AtomicBoolean) {
     val SAMPLING_RATE = 44100
-    val PROCESSING_INTERVAL = 30
+    val PROCESSING_INTERVAL = 10
 
     val bufferSize = AudioRecord.getMinBufferSize(
         SAMPLING_RATE,

@@ -7,7 +7,7 @@ android {
     buildToolsVersion "29.0.3"
 
     defaultConfig {
-        applicationId "com.example.timelapse"
+        applicationId "com.shallow_mind.timelapse"
         minSdkVersion 16
         targetSdkVersion 28
         versionCode 1
