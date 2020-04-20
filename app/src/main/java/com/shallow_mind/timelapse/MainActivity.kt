@@ -3,8 +3,10 @@ package com.shallow_mind.timelapse
 import android.annotation.TargetApi
 import android.content.pm.PackageManager
 import android.os.*
+import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.Toast
 import androidx.annotation.RequiresApi
@@ -28,6 +30,7 @@ class MainActivity : AppCompatActivity() {
     val audioIn = AudioIn(DEFAULT_TARGET_FREQUENCE, 3, takePicture)
     private val pictureHandlerThread = HandlerThread("picture")
     private var pictureCapturingService: PictureCapturingService? = null
+    var screenOn = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         pictureHandlerThread.start()
@@ -70,6 +73,18 @@ class MainActivity : AppCompatActivity() {
         pictureRun.start()
     }
 
+    fun onCheckboxClicked(view: View) {
+        if (view is CheckBox) {
+            val checked: Boolean = view.isChecked
+            screenOn = checked
+            if (screenOn) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+
     private class PictureRun(val pictureCapturingService: PictureCapturingService, val takePicture: AtomicBoolean): Thread() {
         override fun run() {
             Process.setThreadPriority(Process.THREAD_PRIORITY_MORE_FAVORABLE)
@@ -80,8 +95,7 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         takePicture.set(false)
                         pictureCapturingService.capture()
-                        // to not capture too frequently
-                        sleep(1000)
+                        sleep(100)
                     }
                 } catch (e: Exception) {
                     println(e.message)

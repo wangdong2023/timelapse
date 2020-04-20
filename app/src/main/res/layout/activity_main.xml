@@ -8,25 +8,52 @@
     android:paddingLeft="16dp"
     android:paddingRight="16dp">
 
+    <TextView
+        android:id="@+id/label_project_name"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Project Prefix"
+        android:textColor="#00427E"
+        android:fontFamily="sans-serif-medium"
+        android:layout_marginTop="12dp"
+        app:layout_constraintTop_toTopOf="parent" />
     <EditText
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:inputType="textNoSuggestions"
-        android:hint="project_prefix"
+        android:hint="test"
         android:id="@+id/project_name"
         tools:ignore="HardcodedText"
         android:visibility="visible"
         android:autofillHints=""
-        app:layout_constraintTop_toTopOf="parent"/>
+        app:layout_constraintTop_toBottomOf="@id/label_project_name"/>
 
+    <TextView
+        android:id="@+id/label_frequency"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Target frequency (Hz)"
+        android:textColor="#00427E"
+        android:fontFamily="sans-serif-medium"
+        app:layout_constraintTop_toBottomOf="@id/project_name"/>
     <EditText
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:inputType="numberDecimal"
-        android:hint="target frequency"
+        android:hint="3500"
         android:id="@+id/target_frequency"
         tools:ignore="HardcodedText"
-        app:layout_constraintTop_toBottomOf="@id/project_name"/>
+        app:layout_constraintTop_toBottomOf="@id/label_frequency"
+        android:autofillHints="" />
+
+    <CheckBox android:id="@+id/keep_screen_on"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        app:layout_constraintTop_toBottomOf="@id/target_frequency"
+        android:text="Keep screen on (some phones will disable microphone when screen is off or the app goes to background)"
+        android:onClick="onCheckboxClicked"
+        android:checked="true"
+        tools:ignore="MissingConstraints" />
 
     <Button
         android:id="@+id/record"
@@ -34,7 +61,7 @@
         android:layout_height="wrap_content"
         android:text="Record"
         tools:ignore="HardcodedText"
-        app:layout_constraintTop_toBottomOf="@id/target_frequency"
+        app:layout_constraintTop_toBottomOf="@id/keep_screen_on"
         app:layout_constraintRight_toLeftOf="@id/stop"/>
 
 
@@ -45,6 +72,8 @@
         android:text="Stop"
         android:enabled="false"
         tools:ignore="HardcodedText"
-        app:layout_constraintTop_toBottomOf="@id/target_frequency"
+        app:layout_constraintTop_toBottomOf="@id/keep_screen_on"
         app:layout_constraintLeft_toRightOf="@id/record"/>
+
+
 </androidx.constraintlayout.widget.ConstraintLayout>

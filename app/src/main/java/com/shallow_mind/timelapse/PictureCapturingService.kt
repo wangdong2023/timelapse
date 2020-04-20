@@ -24,13 +24,16 @@ import androidx.core.app.ActivityCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.util.*
 import java.util.concurrent.atomic.AtomicReference
-
+import kotlin.concurrent.schedule
 
 @TargetApi(Build.VERSION_CODES.LOLLIPOP)
 @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
 class PictureCapturingService(private val activity: Activity, private val projectName: AtomicReference<String>, private val handler: Handler? = null) {
     private val ORIENTATIONS = SparseIntArray()
+    // to not take picture too frequently, this also avoids the bug that it may take 2 pictures for one layer change
+    private val MIN_CAPTURE_INTERVAL = 2000L
 
     init {
         ORIENTATIONS.append(Surface.ROTATION_0, 90)
@@ -41,7 +44,7 @@ class PictureCapturingService(private val activity: Activity, private val projec
     private var cameraDevice: CameraDevice? = null
 
     enum class CameraState {
-        CLOSED, OPEN, READY, LOCKING_FOCUS, PRE_CAPTURING, CAPTURING
+        CLOSED, OPEN, LOCKING_FOCUS, PRE_CAPTURING, READY, CAPTURING
     }
 
     private var cameraId: String? = null
@@ -54,6 +57,10 @@ class PictureCapturingService(private val activity: Activity, private val projec
     private var flashSupported = false
 
     private val onImageAvailableListener = OnImageAvailableListener { imReader: ImageReader ->
+        Timer("start", false).schedule(MIN_CAPTURE_INTERVAL) {
+            cameraState = CameraState.OPEN
+        }
+
         val image = imReader.acquireLatestImage()
         val buffer = image.planes[0].buffer
         val bytes = ByteArray(buffer.capacity())
@@ -80,7 +87,6 @@ class PictureCapturingService(private val activity: Activity, private val projec
             }
         }
 
-
         if (cameraId == null) {
             throw RuntimeException("No backward camera")
         }
@@ -102,11 +108,22 @@ class PictureCapturingService(private val activity: Activity, private val projec
         reader.setOnImageAvailableListener(onImageAvailableListener, handler)
     }
 
-    fun capture() {
-        if (cameraState != CameraState.READY) {
+    fun capture(): Boolean {
+        if (cameraState != CameraState.OPEN) {
             Log.i(this.javaClass.simpleName, "Camera not ready, skip this picture")
+            return false
         } else {
-            captureStillPicture()
+            Log.i(this.javaClass.simpleName, "Start capturing at ${TimeService.getForLog()}")
+            val previewRequestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            previewRequestBuilder.addTarget(dummySurface)
+            // Auto focus should be continuous for camera preview.
+            previewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE,
+                CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+            // Flash is automatically enabled when necessary.
+            setAutoFlash(previewRequestBuilder)
+            cameraCaptureSession?.setRepeatingRequest(previewRequestBuilder.build(), captureCallback, handler)
+            runPrecaptureSequenceAndThenCapture()
+            return true
         }
     }
 
@@ -119,15 +136,7 @@ class PictureCapturingService(private val activity: Activity, private val projec
                         Log.i(this.javaClass.simpleName, "Session configured ${TimeService.getForLog()}")
                         cameraCaptureSession = session
                         cameraState = CameraState.OPEN
-                        val previewRequestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-                        previewRequestBuilder.addTarget(dummySurface)
-                        // Auto focus should be continuous for camera preview.
-                        previewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE,
-                            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                        // Flash is automatically enabled when necessary.
-                        setAutoFlash(previewRequestBuilder)
-                        cameraCaptureSession?.setRepeatingRequest(previewRequestBuilder.build(), captureCallback, handler)
-                        runPrecaptureSequence()
+
                     } catch (e: CameraAccessException) {
                         Log.e(this.javaClass.simpleName, "Exception while accessing $cameraId", e)
                     }
@@ -203,16 +212,14 @@ class PictureCapturingService(private val activity: Activity, private val projec
                     val afState = result.get(CaptureResult.CONTROL_AF_STATE)
                     if (afState == null) {
                         Log.i(this.javaClass.simpleName, "AF null, Direct still capture")
-                        cameraState = CameraState.READY
-                        cameraCaptureSession!!.stopRepeating()
+                        captureStillPicture()
                     } else if (afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED
                         || afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) {
                         // CONTROL_AE_STATE can be null on some devices
                         val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
                         if (aeState == null || aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED) {
                             Log.i(this.javaClass.simpleName, "AE null or converged, still capture")
-                            cameraState = CameraState.READY
-                            cameraCaptureSession!!.stopRepeating()
+                            captureStillPicture()
                         } else {
                             Log.i(this.javaClass.simpleName, "AE not ready")
                         }
@@ -241,6 +248,8 @@ class PictureCapturingService(private val activity: Activity, private val projec
     }
 
     private fun captureStillPicture() {
+        cameraState = CameraState.READY
+        cameraCaptureSession!!.stopRepeating()
         val captureBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
             addTarget(reader.surface)
             set(CaptureRequest.JPEG_ORIENTATION, getOrientation())
@@ -295,7 +304,7 @@ class PictureCapturingService(private val activity: Activity, private val projec
      * Run the precapture sequence for capturing a still image. This method should be called when
      * we get a response in [.captureCallback] from [.lockFocus].
      */
-    private fun runPrecaptureSequence() {
+    private fun runPrecaptureSequenceAndThenCapture() {
         try {
             val previewRequestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
             previewRequestBuilder.addTarget(dummySurface)
