@@ -91,11 +91,11 @@ class MainActivity : AppCompatActivity() {
             while (true) {
                 try {
                     if (!takePicture.get()) {
-                        sleep(500)
+                        sleep(200)
                     } else {
                         takePicture.set(false)
                         pictureCapturingService.capture()
-                        sleep(100)
+                        sleep(200)
                     }
                 } catch (e: Exception) {
                     println(e.message)
