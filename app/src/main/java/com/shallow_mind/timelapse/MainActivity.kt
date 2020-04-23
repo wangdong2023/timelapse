@@ -22,19 +22,19 @@ import kotlin.concurrent.schedule
 @TargetApi(Build.VERSION_CODES.LOLLIPOP)
 @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
 class MainActivity : AppCompatActivity() {
-    val DEFAULT_PROJECT_NAME = "test"
-    val DEFAULT_TARGET_FREQUENCE = 3500.0
-    val REQUEST_CODE_AUDIO_PERMISSION = 1
-    val projectName = AtomicReference<String>("${DEFAULT_PROJECT_NAME}_${TimeService.getForDirectory()}")
-    val takePicture = AtomicBoolean(false)
-    val audioIn = AudioIn(DEFAULT_TARGET_FREQUENCE, 3, takePicture)
+    private val DEFAULT_PROJECT_NAME = "test"
+    private val DEFAULT_TARGET_FREQUENCE = 3500.0
+    private val REQUEST_CODE_AUDIO_PERMISSION = 1
+    private val projectName = AtomicReference<String>("")
+    private val takePicture = AtomicBoolean(false)
+    private val audioIn = AudioIn(DEFAULT_TARGET_FREQUENCE, takePicture)
     private val pictureHandlerThread = HandlerThread("picture")
     private var pictureCapturingService: PictureCapturingService? = null
-    var screenOn = true
+    private var screenOn = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         pictureHandlerThread.start()
-        val pictureHandler = Handler(pictureHandlerThread.getLooper())
+        val pictureHandler = Handler(pictureHandlerThread.looper)
         pictureCapturingService = PictureCapturingService(this, projectName, pictureHandler)
         val pictureRun = PictureRun(pictureCapturingService!!, takePicture)
 
@@ -56,8 +56,8 @@ class MainActivity : AppCompatActivity() {
             val targetFrequency = (findViewById<EditText>(R.id.target_frequency)).text.toString().toDoubleOrNull()
             audioIn.targetFrequency = targetFrequency?: DEFAULT_TARGET_FREQUENCE
             val pName = (findViewById<EditText>(R.id.project_name)).text
-            projectName.set("${if(pName.isNotEmpty()) pName else DEFAULT_PROJECT_NAME}_${TimeService.getForDirectory()}")
-            Timer("start", false).schedule(3000) {
+            projectName.set("${TimeService.getForDirectory()}_${if(pName.isNotEmpty()) pName else DEFAULT_PROJECT_NAME}")
+            Timer("start", false).schedule(1000) {
                 audioIn.startRecording()
             }
             stopButton.isEnabled = true

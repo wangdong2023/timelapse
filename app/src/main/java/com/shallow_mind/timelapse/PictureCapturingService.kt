@@ -44,7 +44,7 @@ class PictureCapturingService(private val activity: Activity, private val projec
     private var cameraDevice: CameraDevice? = null
 
     enum class CameraState {
-        CLOSED, OPEN, LOCKING_FOCUS, PRE_CAPTURING, READY, CAPTURING
+        CLOSED, OPEN, PRE_CAPTURING, READY, CAPTURING
     }
 
     private var cameraId: String? = null
@@ -277,27 +277,6 @@ class PictureCapturingService(private val activity: Activity, private val projec
     private fun createImageFile(): File {
         val storageDir = context.getExternalFilesDir(projectName.get())
         return File(storageDir, "${TimeService.getForFile()}.jpg")
-    }
-
-    /**
-     * Lock the focus as the first step for a still image capture.
-     */
-    private fun lockFocus() {
-        try {
-            val previewRequestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-            previewRequestBuilder.addTarget(dummySurface)
-            // This is how to tell the camera to lock focus.
-            previewRequestBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER,
-                CameraMetadata.CONTROL_AF_TRIGGER_START)
-            setAutoFlash(previewRequestBuilder)
-            // Tell #captureCallback to wait for the lock.
-            cameraState = CameraState.LOCKING_FOCUS
-//            Log.i(this.javaClass.simpleName, "locking focus")
-
-            cameraCaptureSession?.capture(previewRequestBuilder.build(), captureCallback, handler)
-        } catch (e: CameraAccessException) {
-            Log.e(this.javaClass.simpleName, e.toString())
-        }
     }
 
     /**
